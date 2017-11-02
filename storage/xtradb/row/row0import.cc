@@ -999,6 +999,9 @@ private:
 
 	/** Cluster index instance */
 	dict_index_t*		m_cluster_index;
+
+	/** mini-transaction */
+	mtr_t			m_mtr;
 };
 
 /**
@@ -1602,18 +1605,17 @@ PageConverter::PageConverter(
 	:
 	AbstractCallback(trx),
 	m_cfg(cfg),
+	m_index(cfg->m_indexes),
+	m_current_lsn(log_get_lsn()),
 	m_page_zip_ptr(0),
-	m_heap(0) UNIV_NOTHROW
+	m_rec_iter(),
+	m_offsets_(), m_offsets(m_offsets_),
+	m_heap(0),
+	m_cluster_index(dict_table_get_first_index(cfg->m_table)),
+	m_mtr() UNIV_NOTHROW
 {
-	m_index = m_cfg->m_indexes;
-
-	m_current_lsn = log_get_lsn();
 	ut_a(m_current_lsn > 0);
-
-	m_offsets = m_offsets_;
 	rec_offs_init(m_offsets_);
-
-	m_cluster_index = dict_table_get_first_index(m_cfg->m_table);
 }
 
 /**
@@ -2104,7 +2106,7 @@ PageConverter::operator() (
 		we can work on them */
 
 		if ((err = update_page(block, page_type)) != DB_SUCCESS) {
-			return(err);
+			break;
 		}
 
 		/* Note: For compressed pages this function will write to the
@@ -2141,9 +2143,44 @@ PageConverter::operator() (
 			"%s: Page %lu at offset " UINT64PF " looks corrupted.",
 			m_filepath, (ulong) (offset / m_page_size), offset);
 
-		return(DB_CORRUPTION);
+		err = DB_CORRUPTION;
 	}
 
+	/* If we already had and old page with matching number
+	in the buffer pool, evict it now, because
+	we no longer evict the pages on DISCARD TABLESPACE. */
+	mtr_start(&m_mtr);
+	if (buf_block_t* b = buf_page_get_gen(get_space_id(),
+					      get_zip_size(),
+					      block->page.offset,
+					      RW_NO_LATCH, NULL,
+					      BUF_PEEK_IN_POOL,
+					      __FILE__, __LINE__, &m_mtr)) {
+		buf_pool_t* buf_pool = buf_pool_from_bpage(&b->page);
+		byte* zip_data = b->page.zip.data;
+		ut_ad(!b->page.oldest_modification);
+		ut_ad(!zip_data == !block->page.zip.data);
+		ib_mutex_t* block_mutex;
+		mutex_enter(&buf_pool->LRU_list_mutex);
+
+		if (buf_page_get_state(&b->page) == BUF_BLOCK_FILE_PAGE) {
+			block_mutex = &b->mutex;
+#ifdef UNIV_SYNC_DEBUG
+			rw_lock_s_unlock(&b->debug_latch);
+#endif /* UNUV_SYNC_DEBUG */
+		} else {
+			ut_ad(b->page.state == BUF_BLOCK_ZIP_PAGE);
+			block_mutex = &buf_pool->zip_mutex;
+		}
+		buf_block_unfix(b);
+		mutex_enter(block_mutex);
+		if (!buf_LRU_free_page(&b->page, true)) {
+			ut_ad(0);
+			mutex_exit(&buf_pool->LRU_list_mutex);
+		}
+		mutex_exit(block_mutex);
+	}
+	/* no mtr_commit(), because we released the block */
 	return(err);
 }
 
@@ -3717,8 +3754,7 @@ row_import_for_mysql(
 	The only dirty pages generated should be from the pessimistic purge
 	of delete marked records that couldn't be purged in Phase I. */
 
-	buf_LRU_flush_or_remove_pages(
-		prebuilt->table->space, BUF_REMOVE_FLUSH_WRITE, trx);
+	buf_LRU_flush_or_remove_pages(prebuilt->table->space, trx);
 
 	if (trx_is_interrupted(trx)) {
 		ib_logf(IB_LOG_LEVEL_INFO, "Phase III - Flush interrupted");

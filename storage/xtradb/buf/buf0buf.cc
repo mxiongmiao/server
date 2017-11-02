@@ -2935,7 +2935,7 @@ buf_page_get_gen(
 	ulint		rw_latch,/*!< in: RW_S_LATCH, RW_X_LATCH, RW_NO_LATCH */
 	buf_block_t*	guess,	/*!< in: guessed block or NULL */
 	ulint		mode,	/*!< in: BUF_GET, BUF_GET_IF_IN_POOL,
-				BUF_PEEK_IF_IN_POOL, BUF_GET_NO_LATCH, or
+				BUF_PEEK_IN_POOL, BUF_GET_NO_LATCH, or
 				BUF_GET_IF_IN_POOL_OR_WATCH */
 	const char*	file,	/*!< in: file name */
 	ulint		line,	/*!< in: line where called */
@@ -2965,20 +2965,25 @@ buf_page_get_gen(
 
 #ifdef UNIV_DEBUG
 	switch (mode) {
+	case BUF_PEEK_IN_POOL:
+		/* After DISCARD TABLESPACE, the tablespace would not exist,
+		but in IMPORT TABLESPACE, PageConverter::operator() must
+		replace any old pages, which were not evicted during DISCARD.
+		Skip the assertion on zip_size. */
+		break;
 	case BUF_GET_NO_LATCH:
 		ut_ad(rw_latch == RW_NO_LATCH);
-		break;
+		/* fall through */
 	case BUF_GET:
 	case BUF_GET_IF_IN_POOL:
-	case BUF_PEEK_IF_IN_POOL:
 	case BUF_GET_IF_IN_POOL_OR_WATCH:
 	case BUF_GET_POSSIBLY_FREED:
+		ut_ad(zip_size == fil_space_get_zip_size(space));
 		break;
 	default:
 		ut_error;
 	}
 #endif /* UNIV_DEBUG */
-	ut_ad(zip_size == fil_space_get_zip_size(space));
 	ut_ad(ut_is_2pow(zip_size));
 #ifndef UNIV_LOG_DEBUG
 	ut_ad(!ibuf_inside(mtr)
@@ -3052,7 +3057,7 @@ loop:
 		}
 
 		if (mode == BUF_GET_IF_IN_POOL
-		    || mode == BUF_PEEK_IF_IN_POOL
+		    || mode == BUF_PEEK_IN_POOL
 		    || mode == BUF_GET_IF_IN_POOL_OR_WATCH) {
 #ifdef UNIV_SYNC_DEBUG
 			ut_ad(!rw_lock_own(hash_lock, RW_LOCK_EX));
@@ -3142,7 +3147,7 @@ got_block:
 
 	ut_ad(page_zip_get_size(&block->page.zip) == zip_size);
 
-	if (mode == BUF_GET_IF_IN_POOL || mode == BUF_PEEK_IF_IN_POOL) {
+	if (mode == BUF_GET_IF_IN_POOL || mode == BUF_PEEK_IN_POOL) {
 
 		bool	must_read;
 
@@ -3185,16 +3190,6 @@ got_block:
 
 	case BUF_BLOCK_ZIP_PAGE:
 	case BUF_BLOCK_ZIP_DIRTY:
-		if (mode == BUF_PEEK_IF_IN_POOL) {
-			/* This mode is only used for dropping an
-			adaptive hash index.  There cannot be an
-			adaptive hash index for a compressed-only
-			page, so do not bother decompressing the page. */
-			buf_block_unfix(fix_block);
-
-			return(NULL);
-		}
-
 		bpage = &block->page;
 		ut_ad(fix_mutex == &buf_pool->zip_mutex);
 
@@ -3213,6 +3208,10 @@ got_block:
 			os_thread_sleep(WAIT_FOR_READ);
 
 			goto loop;
+		}
+
+		if (mode == BUF_PEEK_IN_POOL) {
+			return(fix_block);
 		}
 
 		/* Buffer-fix the block so that it cannot be evicted
@@ -3481,7 +3480,7 @@ got_block:
 		buf_block_mutex_exit(fix_block);
 	}
 
-	if (mode != BUF_PEEK_IF_IN_POOL) {
+	if (mode != BUF_PEEK_IN_POOL) {
 		buf_page_make_young_if_needed(&fix_block->page);
 	}
 
@@ -3524,7 +3523,7 @@ got_block:
 
 	mtr_memo_push(mtr, fix_block, fix_type);
 
-	if (mode != BUF_PEEK_IF_IN_POOL && !access_time) {
+	if (mode != BUF_PEEK_IN_POOL && !access_time) {
 		/* In the case of a first access, try to apply linear
 		read-ahead */
 

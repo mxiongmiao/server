@@ -1311,7 +1311,6 @@ btr_search_drop_page_hash_when_freed(
 				or 0 for uncompressed pages */
 	ulint	page_no)	/*!< in: page number */
 {
-	buf_block_t*	block;
 	mtr_t		mtr;
 
 	mtr_start(&mtr);
@@ -1322,15 +1321,29 @@ btr_search_drop_page_hash_when_freed(
 	are possibly holding, we cannot s-latch the page, but must
 	(recursively) x-latch it, even though we are only reading. */
 
-	block = buf_page_get_gen(space, zip_size, page_no, RW_X_LATCH, NULL,
-				 BUF_PEEK_IF_IN_POOL, __FILE__, __LINE__,
-				 &mtr);
-
-	if (block && block->index) {
-
-		buf_block_dbg_add_level(block, SYNC_TREE_NODE_FROM_HASH);
-
-		btr_search_drop_page_hash_index(block);
+	if (buf_block_t* block = buf_page_get_gen(
+		    space, zip_size, page_no, RW_X_LATCH, NULL,
+		    BUF_PEEK_IN_POOL, __FILE__, __LINE__, &mtr)) {
+		switch (buf_page_get_state(&block->page)) {
+		case BUF_BLOCK_POOL_WATCH:
+		case BUF_BLOCK_NOT_USED:
+		case BUF_BLOCK_READY_FOR_USE:
+		case BUF_BLOCK_MEMORY:
+		case BUF_BLOCK_REMOVE_HASH:
+			ut_ad(0);
+			break;
+		case BUF_BLOCK_ZIP_PAGE:
+		case BUF_BLOCK_ZIP_DIRTY:
+			buf_block_unfix(block);
+			break;
+		case BUF_BLOCK_FILE_PAGE:
+			if (!block->index) {
+				break;
+			}
+			buf_block_dbg_add_level(
+				block, SYNC_TREE_NODE_FROM_HASH);
+			btr_search_drop_page_hash_index(block);
+		}
 	}
 
 	mtr_commit(&mtr);
