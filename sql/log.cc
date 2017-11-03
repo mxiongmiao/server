@@ -6330,7 +6330,7 @@ err:
                                (thd, log_file_name, file->pos_in_file,
                                 synced, true, true)))
               // todo-MDEV-13073/fixme: failure simulation
-#ifdef REPLICATION
+#ifdef HAVE_REPLICATION
               || repl_semisync_master.reportBinlogUpdate(thd, log_file_name,
                                                          file->pos_in_file)
 #endif
@@ -6369,7 +6369,7 @@ err:
       if (RUN_HOOK(binlog_storage, after_sync,
                    (thd, log_file_name, file->pos_in_file,
                     true, true))
-#ifdef REPLICATION
+#ifdef HAVE_REPLICATION
           // Todo-MDEV-13073/fixme: failure simulation?
           || repl_semisync_master.waitAfterSync(log_file_name,
                                                 file->pos_in_file)
@@ -7682,7 +7682,7 @@ MYSQL_BIN_LOG::trx_group_commit_leader(group_commit_entry *leader)
                        current->cache_mngr->last_commit_pos_file,
                        current->cache_mngr->last_commit_pos_offset, synced,
                        first, last))
-#ifdef REPLICATION
+#ifdef HAVE_REPLICATION
              || (DBUG_EVALUATE_IF("failed_report_binlog_update", 1, 0) ||
                  repl_semisync_master.
                  reportBinlogUpdate(current->thd,
@@ -7778,7 +7778,7 @@ MYSQL_BIN_LOG::trx_group_commit_leader(group_commit_entry *leader)
                    (current->thd, current->cache_mngr->last_commit_pos_file,
                     current->cache_mngr->last_commit_pos_offset,
                     first, last))
-#ifdef REPLICATION
+#ifdef HAVE_REPLICATION
            || (DBUG_EVALUATE_IF("simulate_after_sync_hook_error", 1, 0) ||
                repl_semisync_master.waitAfterSync(current->cache_mngr->
                                                   last_commit_pos_file,
