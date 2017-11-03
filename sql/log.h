@@ -349,6 +349,11 @@ public:
   /* for documentation of mutexes held in various places in code */
 };
 
+/* Tell the io thread if we can delay the master info sync. */
+#define SEMI_SYNC_SLAVE_DELAY_SYNC 1
+/* Tell the io thread if the current event needs a ack. */
+#define SEMI_SYNC_NEED_ACK  2
+
 class MYSQL_QUERY_LOG: public MYSQL_LOG
 {
 public:

@@ -209,6 +209,12 @@ extern Binlog_relay_IO_delegate *binlog_relay_io_delegate;
   if semisync replication is not enabled, we can return immediately.
 */
 #ifdef HAVE_REPLICATION
+/*
+  As semisync is unpluggined and its hooks are turned into static
+  invocations all other hooks are not run for optimization sake.
+  Todo: introduce a server flag to allow the plugins' hooks to run
+  along with "static" semisync ones.
+*/
 #define RUN_HOOK(group, hook, args)   \
   (unlikely(run_hooks_enabled) ? group ##_delegate->hook args : 0)
 #else

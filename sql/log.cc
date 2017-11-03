@@ -55,6 +55,7 @@
 #include "debug_sync.h"
 #include "sql_show.h"
 #include "my_pthread.h"
+#include "semisync_master.h"
 #include "wsrep_mysqld.h"
 
 /* max size of the log message */
@@ -5201,6 +5202,7 @@ end:
                      "server and restart it.", 
                      new_name_ptr, errno);
   }
+
   mysql_mutex_unlock(&LOCK_index);
   if (need_lock)
     mysql_mutex_unlock(&LOCK_log);
@@ -6326,10 +6328,15 @@ err:
           mysql_mutex_assert_not_owner(&LOCK_commit_ordered);
           if ((error= RUN_HOOK(binlog_storage, after_flush,
                                (thd, log_file_name, file->pos_in_file,
-                                synced, true, true))))
+                                synced, true, true))) ||
+              // todo-MDEV-13073/fixme: failure simulation
+              (//rpl_semi_sync_master_enabled &&
+               repl_semisync_master.reportBinlogUpdate(thd, log_file_name,
+                                                       file->pos_in_file)))
           {
             sql_print_error("Failed to run 'after_flush' hooks");
             error= 1;
+            // Todo-MDEV-13073: +      failed_semisync_report= true;
           }
           else
           {
@@ -6359,7 +6366,11 @@ err:
       mysql_mutex_assert_not_owner(&LOCK_commit_ordered);
       if (RUN_HOOK(binlog_storage, after_sync,
                    (thd, log_file_name, file->pos_in_file,
-                    true, true)))
+                    true, true)) ||
+          // Todo-MDEV-13073/fixme: failure simulation?
+          (//rpl_semi_sync_master_enabled &&
+           repl_semisync_master.waitAfterSync(log_file_name,
+                                              file->pos_in_file)))
       {
         error=1;
         /* error is already printed inside hook */
@@ -7662,16 +7673,24 @@ MYSQL_BIN_LOG::trx_group_commit_leader(group_commit_entry *leader)
       {
         last= current->next == NULL;
         if (!current->error &&
-            RUN_HOOK(binlog_storage, after_flush,
-                (current->thd,
-                 current->cache_mngr->last_commit_pos_file,
-                 current->cache_mngr->last_commit_pos_offset, synced,
-                 first, last)))
+            (RUN_HOOK(binlog_storage, after_flush,
+                      (current->thd,
+                       current->cache_mngr->last_commit_pos_file,
+                       current->cache_mngr->last_commit_pos_offset, synced,
+                       first, last)) ||
+             (DBUG_EVALUATE_IF("failed_report_binlog_update", 1, 0) ||
+              (//rpl_semi_sync_master_enabled &&
+               (repl_semisync_master.
+                reportBinlogUpdate(current->thd,
+                                   current->cache_mngr->last_commit_pos_file,
+                                   current->cache_mngr->
+                                   last_commit_pos_offset))))))
         {
           current->error= ER_ERROR_ON_WRITE;
           current->commit_errno= -1;
           current->error_cache= NULL;
           any_error= true;
+          // Todo-MDEV-13073: check if we need +      failed_semisync_report= true;
         }
         first= false;
       }
@@ -7749,12 +7768,20 @@ MYSQL_BIN_LOG::trx_group_commit_leader(group_commit_entry *leader)
     {
       last= current->next == NULL;
       if (!current->error &&
-          RUN_HOOK(binlog_storage, after_sync,
+          (RUN_HOOK(binlog_storage, after_sync,
                    (current->thd, current->cache_mngr->last_commit_pos_file,
                     current->cache_mngr->last_commit_pos_offset,
-                    first, last)))
+                    first, last)) ||
+           (DBUG_EVALUATE_IF("simulate_after_sync_hook_error", 1, 0) ||
+            (//rpl_semi_sync_master_enabled &&
+             repl_semisync_master.waitAfterSync(current->cache_mngr->
+                                                last_commit_pos_file,
+                                                current->cache_mngr->
+                                                last_commit_pos_offset)))))
       {
-      /* error is already printed inside hook */
+        const char *hook_name= rpl_semi_sync_master_enabled ?
+          "'waitAfterSync'" : "binlog_storage 'after_sync'";
+        sql_print_error("Failed to call '%s'", hook_name);
       }
       first= false;
     }
