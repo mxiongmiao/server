@@ -6328,11 +6328,13 @@ err:
           mysql_mutex_assert_not_owner(&LOCK_commit_ordered);
           if ((error= RUN_HOOK(binlog_storage, after_flush,
                                (thd, log_file_name, file->pos_in_file,
-                                synced, true, true))) ||
+                                synced, true, true)))
               // todo-MDEV-13073/fixme: failure simulation
-              (//rpl_semi_sync_master_enabled &&
-               repl_semisync_master.reportBinlogUpdate(thd, log_file_name,
-                                                       file->pos_in_file)))
+#ifdef REPLICATION
+              || repl_semisync_master.reportBinlogUpdate(thd, log_file_name,
+                                                         file->pos_in_file)
+#endif
+              )
           {
             sql_print_error("Failed to run 'after_flush' hooks");
             error= 1;
@@ -6366,11 +6368,13 @@ err:
       mysql_mutex_assert_not_owner(&LOCK_commit_ordered);
       if (RUN_HOOK(binlog_storage, after_sync,
                    (thd, log_file_name, file->pos_in_file,
-                    true, true)) ||
+                    true, true))
+#ifdef REPLICATION
           // Todo-MDEV-13073/fixme: failure simulation?
-          (//rpl_semi_sync_master_enabled &&
-           repl_semisync_master.waitAfterSync(log_file_name,
-                                              file->pos_in_file)))
+          || repl_semisync_master.waitAfterSync(log_file_name,
+                                                file->pos_in_file)
+#endif
+          )
       {
         error=1;
         /* error is already printed inside hook */
@@ -7677,14 +7681,16 @@ MYSQL_BIN_LOG::trx_group_commit_leader(group_commit_entry *leader)
                       (current->thd,
                        current->cache_mngr->last_commit_pos_file,
                        current->cache_mngr->last_commit_pos_offset, synced,
-                       first, last)) ||
-             (DBUG_EVALUATE_IF("failed_report_binlog_update", 1, 0) ||
-              (//rpl_semi_sync_master_enabled &&
-               (repl_semisync_master.
-                reportBinlogUpdate(current->thd,
-                                   current->cache_mngr->last_commit_pos_file,
-                                   current->cache_mngr->
-                                   last_commit_pos_offset))))))
+                       first, last))
+#ifdef REPLICATION
+             || (DBUG_EVALUATE_IF("failed_report_binlog_update", 1, 0) ||
+                 repl_semisync_master.
+                 reportBinlogUpdate(current->thd,
+                                    current->cache_mngr->last_commit_pos_file,
+                                    current->cache_mngr->
+                                    last_commit_pos_offset))
+#endif
+             ))
         {
           current->error= ER_ERROR_ON_WRITE;
           current->commit_errno= -1;
@@ -7771,13 +7777,15 @@ MYSQL_BIN_LOG::trx_group_commit_leader(group_commit_entry *leader)
           (RUN_HOOK(binlog_storage, after_sync,
                    (current->thd, current->cache_mngr->last_commit_pos_file,
                     current->cache_mngr->last_commit_pos_offset,
-                    first, last)) ||
-           (DBUG_EVALUATE_IF("simulate_after_sync_hook_error", 1, 0) ||
-            (//rpl_semi_sync_master_enabled &&
-             repl_semisync_master.waitAfterSync(current->cache_mngr->
-                                                last_commit_pos_file,
-                                                current->cache_mngr->
-                                                last_commit_pos_offset)))))
+                    first, last))
+#ifdef REPLICATION
+           || (DBUG_EVALUATE_IF("simulate_after_sync_hook_error", 1, 0) ||
+               repl_semisync_master.waitAfterSync(current->cache_mngr->
+                                                  last_commit_pos_file,
+                                                  current->cache_mngr->
+                                                  last_commit_pos_offset))
+#endif
+           ))
       {
         const char *hook_name= rpl_semi_sync_master_enabled ?
           "'waitAfterSync'" : "binlog_storage 'after_sync'";
