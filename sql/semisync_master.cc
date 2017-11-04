@@ -700,6 +700,12 @@ int ReplSemiSyncMaster::waitAfterCommit(THD* thd, bool all)
       waitPoint() == SEMI_SYNC_MASTER_WAIT_POINT_AFTER_STORAGE_COMMIT)
     ret= commitTrx(log_file, log_pos);
 
+  if (is_real_trans && log_info)
+  {
+    log_info->log_file[0]= 0;
+    log_info->log_pos= 0;
+  }
+
   return ret;
 }
 
