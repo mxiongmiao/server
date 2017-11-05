@@ -3464,7 +3464,7 @@ got_block:
 	}
 #endif /* UNIV_SYNC_DEBUG */
 
-#if defined UNIV_DEBUG_FILE_ACCESSES || defined UNIV_DEBUG
+#if 0 // FIXME: defined UNIV_DEBUG_FILE_ACCESSES || defined UNIV_DEBUG
 	ut_a(mode == BUF_GET_POSSIBLY_FREED
 	     || !fix_block->page.file_page_was_freed);
 #endif
